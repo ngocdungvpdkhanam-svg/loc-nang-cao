@@ -12,6 +12,8 @@ st.markdown("""
     .stat-box { background: #f0f4ff; border-radius: 10px; padding: 15px; text-align: center; border-left: 5px solid #2e86de; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .stat-num { font-size: 1.8rem; font-weight: 700; color: #1e3a5f; }
     .stat-label { font-size: 0.8rem; color: #555; text-transform: uppercase; font-weight: 600; }
+    .info-card { background: #ffffff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    .col-name { color: #2e86de; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -29,7 +31,6 @@ def get_row_colors(file_content, header_idx):
     wb = load_workbook(file_bytes, read_only=False, data_only=True)
     ws = wb.active
     colors = []
-    # Chỉ quét cột A để lấy màu đại diện (Tăng tốc độ)
     for row in ws.iter_rows(min_row=header_idx + 2, min_col=1, max_col=1):
         cell = row[0]
         color_hex = "No Fill"
@@ -55,14 +56,13 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Tải file .xlsx", type=["xlsx"])
     h_row = st.number_input("Dòng tiêu đề (Header):", min_value=1, value=1)
     st.divider()
-    enable_color = st.checkbox("🌈 Kích hoạt lọc màu", help="Bật để quét mã màu từ file Excel")
+    enable_color = st.checkbox("🌈 Kích hoạt lọc màu")
 
 # ── Xử lý chính ─────────────────────────────────────────────────────────────
 if uploaded_file:
     file_content = uploaded_file.getvalue()
     df_raw = get_clean_data(file_content, h_row - 1)
     
-    # Xử lý màu sắc
     if enable_color:
         with st.spinner("Đang quét màu..."):
             colors = get_row_colors(file_content, h_row - 1)
@@ -70,7 +70,31 @@ if uploaded_file:
     else:
         df_raw['__color__'] = "No Fill"
 
-    # Giao diện lọc
+    # ── PHẦN MỚI: BẢNG TỔNG QUAN THÔNG TIN FILE ──────────────────────────────
+    with st.expander("📋 BẢNG THÔNG TIN CÁC CỘT TRONG FILE", expanded=True):
+        st.write("Dựa vào đây để bạn chọn chính xác giá trị cần lọc:")
+        
+        info_cols = st.columns(3)
+        for i, col in enumerate(df_raw.columns):
+            if col == "__color__": continue
+            
+            with info_cols[i % 3]:
+                unique_vals = df_raw[col].dropna().unique()
+                count_unique = len(unique_vals)
+                dtype = "Số" if pd.api.types.is_numeric_dtype(df_raw[col]) else "Chữ"
+                
+                # Hiển thị tóm tắt từng cột
+                st.markdown(f"""
+                <div class="info-card">
+                    <div class="col-name">📍 {col}</div>
+                    <div style="font-size:0.85rem; color:#666;">
+                        Kiểu: {dtype} | Duy nhất: {count_unique}<br>
+                        Gợi ý: {", ".join(map(str, unique_vals[:5]))}{"..." if count_unique > 5 else ""}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # ── PHẦN LỌC DỮ LIỆU ─────────────────────────────────────────────────────
     st.subheader("🔍 Cài đặt bộ lọc")
     
     t1, t2, t3 = st.tabs(["Lọc Nội dung", "Lọc Màu sắc", "Logic NẾU-THÌ"])
@@ -79,22 +103,30 @@ if uploaded_file:
     with t1:
         logic_mode = st.radio("Kết hợp điều kiện:", ["VÀ (AND)", "HOẶC (OR)"], horizontal=True)
         sel_cols = st.multiselect("Chọn cột muốn lọc:", [c for c in df_raw.columns if c != '__color__'])
-        sub_masks = []
+        
         if sel_cols:
             c_ui = st.columns(2)
+            sub_masks = []
             for i, col in enumerate(sel_cols):
                 with c_ui[i % 2]:
-                    val = st.text_input(f"Tìm trong [{col}]:", key=f"v_{col}")
-                    if val:
-                        sub_masks.append(df_raw[col].astype(str).str.contains(val, case=False, na=False))
-        
-        if sub_masks:
-            if logic_mode == "VÀ (AND)":
-                for sm in sub_masks: mask &= sm
-            else:
-                or_m = sub_masks[0]
-                for sm in sub_masks[1:]: or_m |= sm
-                mask &= or_m
+                    # Nâng cấp: Nếu cột có ít giá trị duy nhất, dùng dropdown cho dễ chọn
+                    u_vals = df_raw[col].dropna().unique()
+                    if len(u_vals) < 50:
+                        val = st.multiselect(f"Chọn giá trị trong [{col}]:", options=u_vals, key=f"sel_{col}")
+                        if val:
+                            sub_masks.append(df_raw[col].isin(val))
+                    else:
+                        val = st.text_input(f"Nhập từ khóa tìm trong [{col}]:", key=f"v_{col}")
+                        if val:
+                            sub_masks.append(df_raw[col].astype(str).str.contains(val, case=False, na=False))
+            
+            if sub_masks:
+                if logic_mode == "VÀ (AND)":
+                    for sm in sub_masks: mask &= sm
+                else:
+                    or_m = sub_masks[0]
+                    for sm in sub_masks[1:]: or_m |= sm
+                    mask &= or_m
 
     with t2:
         if enable_color:
@@ -102,26 +134,26 @@ if uploaded_file:
             sel_colors = st.multiselect("Chọn màu giữ lại:", u_colors, default=u_colors)
             mask &= df_raw['__color__'].isin(sel_colors)
         else:
-            st.info("Hãy tích vào 'Kích hoạt lọc màu' ở thanh bên trái để sử dụng.")
+            st.info("Hãy tích vào 'Kích hoạt lọc màu' ở thanh bên trái.")
 
     with t3:
-        use_it = st.checkbox("Sử dụng NẾU - THÌ")
+        use_it = st.checkbox("Kích hoạt logic NẾU - THÌ")
         if use_it:
             ic1, ic2, ic3 = st.columns(3)
             if_col = ic1.selectbox("NẾU Cột", df_raw.columns)
-            if_val = ic2.text_input("Giá trị chứa")
+            if_val = ic2.text_input("Có giá trị chứa", key="if_v")
             then_col = ic3.selectbox("THÌ Cột đó chứa", df_raw.columns)
-            then_val = st.text_input("Giá trị thỏa mãn")
+            then_val = st.text_input("Giá trị phải thỏa mãn", key="then_v")
             if if_val and then_val:
                 cond_a = df_raw[if_col].astype(str).str.contains(if_val, case=False, na=False)
                 cond_b = df_raw[then_col].astype(str).str.contains(then_val, case=False, na=False)
                 mask &= (~cond_a | cond_b)
 
-    # ── BẢNG THÔNG TIN (STAT BOXES) ──────────────────────────────────────────
+    # ── THỐNG KÊ KẾT QUẢ ────────────────────────────────────────────────────
     df_final = df_raw[mask]
     
     st.write("---")
-    st.subheader("📋 Bảng thông tin kết quả")
+    st.subheader("📊 Kết quả xử lý")
     
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -135,11 +167,10 @@ if uploaded_file:
         ratio = (len(df_final)/len(df_raw)*100) if len(df_raw)>0 else 0
         st.markdown(f'<div class="stat-box"><div class="stat-num">{ratio:.1f}%</div><div class="stat-label">Tỷ lệ giữ</div></div>', unsafe_allow_html=True)
 
-    # ── Hiển thị & Tải về ────────────────────────────────────────────────────
-    st.write("")
     if not df_final.empty:
+        st.write("")
         st.download_button(
-            label=f"📥 Tải xuống file Excel ({len(df_final)} hàng)",
+            label=f"📥 Tải file Excel kết quả ({len(df_final)} hàng)",
             data=to_excel(df_final),
             file_name="ket_qua_loc.xlsx",
             type="primary",
@@ -147,8 +178,7 @@ if uploaded_file:
         )
         st.dataframe(df_final.drop(columns=['__color__'], errors='ignore'), use_container_width=True)
     else:
-        st.warning("Không có hàng nào thỏa mãn điều kiện lọc.")
+        st.warning("Không có dữ liệu thỏa mãn.")
 
 else:
-    st.info("👋 Chào mừng bạn! Hãy tải file Excel lên để bắt đầu.")
-    st.image("https://img.freepik.com/free-vector/data-extraction-concept-illustration_114360-4766.jpg", width=300)
+    st.info("👋 Chào mừng! Hãy tải file Excel lên để bắt đầu.")
