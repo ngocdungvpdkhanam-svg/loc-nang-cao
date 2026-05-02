@@ -126,12 +126,38 @@ with st.sidebar:
 
     if uploaded:
         try:
+            header_row = 0
             if uploaded.name.endswith(".csv"):
                 df_raw = pd.read_csv(uploaded)
             else:
-                sheet_names = pd.ExcelFile(uploaded).sheet_names
+                xls_file = pd.ExcelFile(uploaded)
+                sheet_names = xls_file.sheet_names
                 selected_sheet = st.selectbox("Chọn sheet", sheet_names)
-                df_raw = pd.read_excel(uploaded, sheet_name=selected_sheet)
+
+                # Tự động phát hiện hàng header thực sự (bỏ qua tiêu đề phụ/merged cells)
+                df_probe = pd.read_excel(uploaded, sheet_name=selected_sheet, header=None, nrows=20)
+                header_row = 0
+                for i, row in df_probe.iterrows():
+                    non_null = row.dropna()
+                    text_vals = [v for v in non_null if isinstance(v, str)]
+                    if len(text_vals) >= 2 and i <= 15:
+                        header_row = i
+                        break
+
+                df_raw = pd.read_excel(uploaded, sheet_name=selected_sheet, header=header_row)
+
+                # Xóa hàng toàn NaN (sub-header của merged cells)
+                df_raw = df_raw.dropna(how="all").reset_index(drop=True)
+
+                # Làm sạch tên cột: bỏ Unnamed, bỏ newline
+                new_cols = []
+                for i, col in enumerate(df_raw.columns):
+                    if str(col).startswith("Unnamed:"):
+                        prev = new_cols[-1] if new_cols else f"Col_{i}"
+                        new_cols.append(f"{prev}_{i}")
+                    else:
+                        new_cols.append(str(col).strip().replace("\n", " "))
+                df_raw.columns = new_cols
 
             if st.session_state.df_original is None or st.button("🔄 Tải lại file"):
                 st.session_state.df_original = df_raw.copy()
@@ -139,6 +165,8 @@ with st.sidebar:
                 st.session_state.conditions = []
                 st.session_state.history = []
                 st.success(f"✅ Đã tải: {len(df_raw):,} hàng × {len(df_raw.columns)} cột")
+                if header_row > 0:
+                    st.info(f"ℹ️ File có tiêu đề phụ — đã tự động bỏ qua {header_row} hàng đầu.")
         except Exception as e:
             st.error(f"Lỗi đọc file: {e}")
 
