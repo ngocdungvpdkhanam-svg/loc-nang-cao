@@ -133,4 +133,13 @@ if uploaded_file:
         st.download_button(
             label=f"📥 Tải xuống file Excel đã lọc ({len(df_final)} hàng)",
             data=to_excel(df_final),
-            file_name="du_lieu_da_loc.xl
+            file_name="du_lieu_da_loc.xlsx",
+            type="primary",
+            use_container_width=True
+        )
+        st.dataframe(df_final, use_container_width=True)
+    else:
+        st.warning("⚠️ Không có hàng nào thỏa mãn điều kiện bạn đã chọn.")
+
+else:
+    st.info("👋 Xin chào! Vui lòng tải file Excel lên để bắt đầu lọc dữ liệu.")
