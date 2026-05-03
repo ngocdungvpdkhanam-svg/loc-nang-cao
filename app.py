@@ -12,20 +12,31 @@ st.markdown("""
     .stat-box { background: #f0f4ff; border-radius: 10px; padding: 15px; text-align: center; border-left: 5px solid #2e86de; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .stat-num { font-size: 1.8rem; font-weight: 700; color: #1e3a5f; }
     .stat-label { font-size: 0.8rem; color: #555; text-transform: uppercase; font-weight: 600; }
-    .filter-container { background: #ffffff; border: 1px solid #dee2e6; border-radius: 12px; padding: 20px; margin-top: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .filter-header { color: #2e86de; font-weight: 800; font-size: 1.1rem; border-bottom: 2px solid #f0f2f6; margin-bottom: 15px; padding-bottom: 5px; }
-    .blank-button { background-color: #fff1f0; border: 1px solid #ffa39e; color: #cf222e; font-weight: bold; }
+    .filter-card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 10px; padding: 20px; margin-top: 10px; border-top: 5px solid #ff4b4b; }
+    .blank-label { color: #ff4b4b; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Hàm xử lý dữ liệu ────────────────────────────────────────────────────────
+# ── Hàm xử lý dữ liệu (Cực kỳ quan trọng) ──────────────────────────────────────
 @st.cache_data
 def get_clean_data(file_content, header_idx):
     file_bytes = io.BytesIO(file_content)
+    # 1. Đọc dữ liệu
     df = pd.read_excel(file_bytes, header=header_idx)
-    df.columns = [str(c).strip() for c in df.columns]
-    # Đồng bộ hóa tất cả các kiểu ô trống về chuẩn (None)
-    df = df.replace(r'^\s*$', pd.NA, regex=True)
+    
+    # 2. Làm sạch tên cột
+    df.columns = [str(c).strip() if pd.notnull(c) else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
+    
+    # 3. KỸ THUẬT QUAN TRỌNG: Xử lý ô trống
+    # Biến tất cả: NaN, Chuỗi rỗng "", Chuỗi toàn dấu cách "   " thành nhãn "(Trống - Blanks)"
+    def clean_blanks(val):
+        if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
+            return "(Trống - Blanks)"
+        return str(val).strip()
+
+    for col in df.columns:
+        df[col] = df[col].apply(clean_blanks)
+        
     return df.dropna(how="all").reset_index(drop=True)
 
 def to_excel(df):
@@ -39,6 +50,8 @@ with st.sidebar:
     st.markdown('<div class="main-title" style="font-size:1.5rem;">📁 Nhập dữ liệu</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("Tải file .xlsx", type=["xlsx"])
     h_row = st.number_input("Dòng tiêu đề (Header):", min_value=1, value=6)
+    st.write("---")
+    st.info("💡 Lưu ý: Hệ thống đã tự động gộp tất cả ô rỗng/trắng vào nhãn **(Trống - Blanks)** để bạn dễ chọn.")
 
 # ── Xử lý chính ─────────────────────────────────────────────────────────────
 if uploaded_file:
@@ -46,109 +59,104 @@ if uploaded_file:
     df_raw = get_clean_data(file_content, h_row - 1)
     display_cols = df_raw.columns.tolist()
 
-    # ── PHẦN 1: THÔNG TIN CHI TIẾT CÁC CỘT ──────────────────────────────────
-    with st.expander("📋 TỔNG QUAN DỮ LIỆU CÁC CỘT", expanded=True):
+    # Kiểm tra nếu file đọc ra bị lỗi cột Unnamed quá nhiều
+    if "Unnamed: 0" in display_cols:
+        st.warning("⚠️ Dòng tiêu đề có vẻ chưa đúng, bạn hãy thử chỉnh lại 'Dòng tiêu đề' ở bên trái.")
+
+    # ── PHẦN 1: TỔNG QUAN FILE ──────────────────────────────────────────────
+    with st.expander("📋 KIỂM TRA CỘT & Ô TRỐNG", expanded=True):
         info_cols = st.columns(4)
         for i, col in enumerate(display_cols):
             with info_cols[i % 4]:
-                nulls = df_raw[col].isna().sum()
+                blank_count = (df_raw[col] == "(Trống - Blanks)").sum()
                 st.markdown(f'''
-                <div style="background:white; padding:10px; border-radius:8px; border:1px solid #eee; margin-bottom:10px;">
-                    <small style="color:#888;">Cột:</small><br><b>{col}</b><br>
-                    <small style="color:{"red" if nulls > 0 else "green"}">Số ô trống: {nulls}</small>
+                <div style="background:white; padding:8px; border-radius:5px; border:1px solid #eee; margin-bottom:5px;">
+                    <b style="color:#2e86de;">{col}</b><br>
+                    <small>Số ô trống: <span class="blank-label">{blank_count}</span></small>
                 </div>''', unsafe_allow_html=True)
 
-    # ── PHẦN 2: BỘ LỌC KIỂU MỚI (CHỐNG TRÔI) ────────────────────────────────
+    # ── PHẦN 2: BỘ LỌC CẢI TIẾN ──────────────────────────────────────────────
     st.subheader("🔍 Cài đặt bộ lọc")
     
-    sel_cols = st.multiselect("BƯỚC 1: Chọn các cột bạn muốn thực hiện lọc:", display_cols)
-    
+    t1, t2, t3 = st.tabs(["Lọc Nội dung (Chống lỗi)", "Lọc Màu sắc", "Logic NẾU-THÌ"])
     mask = pd.Series([True] * len(df_raw))
 
-    if sel_cols:
-        st.info("BƯỚC 2: Tùy chỉnh giá trị cho từng cột đã chọn:")
-        logic_mode = st.radio("Kết hợp logic giữa các cột:", ["VÀ (Thỏa mãn tất cả)", "HOẶC (Chỉ cần thỏa 1 cái)"], horizontal=True)
+    with t1:
+        logic_mode = st.radio("Kết hợp điều kiện:", ["VÀ (AND)", "HOẶC (OR)"], horizontal=True)
+        sel_cols = st.multiselect("Chọn các cột bạn muốn lọc:", display_cols)
         
-        sub_masks = []
-        for col in sel_cols:
-            with st.container():
-                st.markdown(f'<div class="filter-container">', unsafe_allow_html=True)
-                st.markdown(f'<div class="filter-header">📍 CỘT: {col}</div>', unsafe_allow_html=True)
+        if sel_cols:
+            sub_masks = []
+            for col in sel_cols:
+                st.markdown(f'<div class="filter-card">', unsafe_allow_html=True)
+                st.markdown(f"📍 Đang lọc cột: **{col}**")
                 
-                # --- PHÂN CHIA CHẾ ĐỘ LỌC RÕ RÀNG ---
-                # Dùng radio để người dùng chọn hẳn chế độ, không bị lẫn
-                mode = st.radio(
-                    f"Chọn chế độ lọc cho [{col}]:",
-                    ["Giữ lại tất cả", "CHỈ LẤY Ô TRỐNG (Blanks)", "Chọn theo danh sách cụ thể"],
-                    key=f"mode_{col}",
-                    horizontal=True
-                )
+                # Lấy danh sách giá trị (Nhãn Trống sẽ luôn xuất hiện nếu có)
+                options = sorted(df_raw[col].unique().tolist())
+                
+                # ĐƯA NHÃN TRỐNG LÊN ĐẦU DANH SÁCH CHO DỄ CHỌN
+                if "(Trống - Blanks)" in options:
+                    options.remove("(Trống - Blanks)")
+                    options = ["(Trống - Blanks)"] + options
 
-                if mode == "CHỈ LẤY Ô TRỐNG (Blanks)":
-                    st.warning(f"Đã kích hoạt: Chỉ lấy các dòng mà cột '{col}' đang để TRỐNG.")
-                    sub_masks.append(df_raw[col].isna())
+                c1, c2 = st.columns([3, 1])
+                with c2:
+                    is_all = st.checkbox("✅ Chọn tất cả", key=f"all_{col}", value=False)
                 
-                elif mode == "Chọn theo danh sách cụ thể":
-                    # Lấy danh sách giá trị (không bao gồm ô trống)
-                    unique_vals = sorted([str(x) for x in df_raw[col].dropna().unique()])
-                    
-                    # Thêm nút bấm hỗ trợ chọn nhanh
-                    c1, c2 = st.columns([3, 1])
-                    with c2:
-                        select_all = st.checkbox("Chọn tất cả", key=f"all_{col}")
-                    
-                    with c1:
-                        default_val = unique_vals if select_all else []
-                        selected = st.multiselect(
-                            f"Danh sách giá trị của [{col}]:",
-                            options=unique_vals,
-                            default=default_val,
-                            key=f"ms_{col}"
-                        )
-                    
-                    if selected:
-                        sub_masks.append(df_raw[col].astype(str).isin(selected))
-                    else:
-                        # Nếu chọn "Cụ thể" mà không tích gì -> Bị coi là lọc mất hết (giống Excel)
-                        sub_masks.append(pd.Series([False] * len(df_raw)))
+                with c1:
+                    default_sel = options if is_all else []
+                    selected = st.multiselect(
+                        f"Chọn giá trị cho [{col}]:",
+                        options=options,
+                        default=default_sel,
+                        key=f"ms_{col}"
+                    )
                 
-                else: # Giữ lại tất cả
-                    sub_masks.append(pd.Series([True] * len(df_raw)))
+                # Tạo bộ lọc (Mask)
+                if selected:
+                    sub_masks.append(df_raw[col].isin(selected))
+                else:
+                    # Nếu không chọn gì -> Lọc mất sạch (giống Excel)
+                    sub_masks.append(pd.Series([False] * len(df_raw)))
                 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Tổng hợp các Mask
-        if sub_masks:
-            if "VÀ" in logic_mode:
-                for sm in sub_masks: mask &= sm
-            else:
-                or_m = sub_masks[0]
-                for sm in sub_masks[1:]: or_m |= sm
-                mask &= or_m
+            if sub_masks:
+                if "VÀ" in logic_mode:
+                    for sm in sub_masks: mask &= sm
+                else:
+                    or_m = sub_masks[0]
+                    for sm in sub_masks[1:]: or_m |= sm
+                    mask &= or_m
 
-    # ── PHẦN 3: KẾT QUẢ XỬ LÝ (STYLE BOXES) ──────────────────────────────────
+    # ... (Các tab khác giữ nguyên)
+
+    # ── PHẦN 3: KẾT QUẢ XỬ LÝ ──────────────────────────────────────────────
     df_final = df_raw[mask]
     
+    # TRƯỚC KHI HIỂN THỊ: Biến ngược nhãn "(Trống - Blanks)" về rỗng để file tải về đẹp
+    df_final_export = df_final.replace("(Trống - Blanks)", "")
+
     st.write("---")
-    st.markdown("### 📊 Kết quả thống kê")
+    st.markdown("### 📊 Kết quả sau khi lọc")
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="stat-box"><div class="stat-num">{len(df_raw):,}</div><div class="stat-label">Tổng hàng gốc</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="stat-box"><div class="stat-num">{len(df_final):,}</div><div class="stat-label">Hàng thỏa điều kiện</div></div>', unsafe_allow_html=True)
+    c1.markdown(f'<div class="stat-box"><div class="stat-num">{len(df_raw):,}</div><div class="stat-label">Hàng gốc</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="stat-box"><div class="stat-num">{len(df_final):,}</div><div class="stat-label">Hàng thỏa ĐK</div></div>', unsafe_allow_html=True)
     c3.markdown(f'<div class="stat-box"><div class="stat-num" style="color:#cf222e">{len(df_raw)-len(df_final):,}</div><div class="stat-label">Đã loại bỏ</div></div>', unsafe_allow_html=True)
     ratio = (len(df_final)/len(df_raw)*100) if len(df_raw)>0 else 0
-    c4.markdown(f'<div class="stat-box"><div class="stat-num">{ratio:.1f}%</div><div class="stat-label">Tỷ lệ giữ lại</div></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="stat-box"><div class="stat-num">{ratio:.1f}%</div><div class="stat-label">Tỷ lệ giữ</div></div>', unsafe_allow_html=True)
 
     if not df_final.empty:
         st.write("")
         st.download_button(
-            label=f"📥 Tải xuống file kết quả ({len(df_final)} hàng)",
-            data=to_excel(df_final),
-            file_name="ket_qua_loc_du_lieu.xlsx",
+            label=f"📥 Tải Excel kết quả ({len(df_final)} hàng)",
+            data=to_excel(df_final_export),
+            file_name="ket_qua_loc.xlsx",
             type="primary",
             use_container_width=True
         )
-        st.dataframe(df_final, use_container_width=True)
+        st.dataframe(df_final_export, use_container_width=True)
     else:
-        st.warning("⚠️ Không có dữ liệu nào khớp với các điều kiện lọc bạn đã chọn.")
+        st.warning("⚠️ Không có dữ liệu thỏa mãn điều kiện.")
 else:
-    st.info("👋 Chào bạn! Hãy tải file Excel lên để bắt đầu.")
+    st.info("👋 Hãy tải file Excel lên để bắt đầu.")
